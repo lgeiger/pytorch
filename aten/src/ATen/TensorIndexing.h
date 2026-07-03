@@ -380,6 +380,41 @@ inline std::tuple<bool, Tensor> canDispatchToMaskedFill(
   return std::make_tuple(true, std::move(mask));
 }
 
+inline std::tuple<bool, int64_t, Tensor> canDispatchToIndexFill(
+    const Tensor& self,
+    const torch::List<std::optional<at::Tensor>>& indices) {
+  if (self.layout() != at::kStrided || self.is_quantized()) {
+    return std::make_tuple(false, -1, Tensor());
+  }
+  int64_t dim = -1;
+  Tensor index_tensor;
+  auto self_device = self.device();
+  for (const auto i : c10::irange(indices.size())) {
+    const std::optional<Tensor>& opt_index = indices[i];
+    if (opt_index.has_value() && opt_index->defined()) {
+      if (index_tensor.defined()) {
+        return std::make_tuple(false, -1, Tensor());
+      }
+      index_tensor = *opt_index;
+      dim = i;
+    }
+  }
+
+  if (!index_tensor.defined()) {
+    return std::make_tuple(false, -1, Tensor());
+  }
+
+  if ((index_tensor.scalar_type() != kLong &&
+       index_tensor.scalar_type() != kInt) ||
+      index_tensor.device() != self_device ||
+      index_tensor.dim() > 1 ||
+      dim >= self.dim()) {
+    return std::make_tuple(false, -1, Tensor());
+  }
+
+  return std::make_tuple(true, dim, index_tensor);
+}
+
 // NOTE: Why do we mirror instead of replace the `count_specified_dimensions`
 // function in torch/csrc/autograd/python_variable_indexing.cpp? It's because
 // `count_specified_dimensions` is on the hot path of Python tensor multi-dim
@@ -685,6 +720,28 @@ inline bool try_dispatch_masked_fill_(
   return false;
 }
 
+inline bool try_dispatch_index_fill_(
+    Tensor& self,
+    std::vector<Tensor> indices,
+    const Scalar& value) {
+  // Remove trailing null elements from indices
+  while (!indices.empty() && !indices.back().defined()) {
+    indices.pop_back();
+  }
+  auto list_indices = impl::typeConvertIndices(self, std::move(indices));
+  auto [can_dispatch, dim, index] = impl::canDispatchToIndexFill(self, list_indices);
+  if (can_dispatch) {
+    // `index_fill_` requires an int64 index, so cast int32 indices. On CUDA
+    // this is a device-side cast and does not introduce a host sync.
+    if (index.scalar_type() != kLong) {
+      index = index.to(kLong);
+    }
+    self.index_fill_(dim, index, value);
+    return true;
+  }
+  return false;
+}
+
 // NOTE [ Setting `disable_slice_optimization` when calling C++ tensor indexing
 // functions from Python ]
 //
@@ -847,6 +904,9 @@ inline void set_item(
 
   if constexpr (std::is_same_v<T, Scalar>) {
     if (try_dispatch_masked_fill_(sliced, tensorIndices, value)) {
+      return;
+    }
+    if (try_dispatch_index_fill_(sliced, tensorIndices, value)) {
       return;
     }
   }

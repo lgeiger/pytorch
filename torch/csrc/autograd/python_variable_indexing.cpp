@@ -580,6 +580,10 @@ static int THPVariable_setitem_impl(
               sliced, variableIndices, value)) {
         return 0;
       }
+      if (at::indexing::try_dispatch_index_fill_(
+              sliced, variableIndices, value)) {
+        return 0;
+      }
     }
     Tensor valueTensor = asTensor(value, self_);
     SymIntArrayRef valueSizes = valueTensor.sym_sizes();

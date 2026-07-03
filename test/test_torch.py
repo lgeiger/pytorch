@@ -2062,6 +2062,7 @@ class TestTorchDeviceType(TestCase):
         # prepare inputs for subsequent ops
         size = 4
         x = torch.rand(size, device=device)
+        x2d = torch.rand(size, size, device=device)
         y = torch.rand((), device=device)
         z = torch.randn(size, device=device, dtype=torch.complex64)
         ind = torch.randint(size, (3,), device=device)
@@ -2073,6 +2074,8 @@ class TestTorchDeviceType(TestCase):
                           lambda: _ind_put_fn(x, mask_cpu, y),
                           lambda: _ind_put_fn(x, ind, y),
                           lambda: _ind_put_fn(x, ind, 1.),
+                          lambda: _ind_put_fn(x2d, (slice(None), ind), 1.),
+                          lambda: _ind_put_fn(x2d, (slice(None), ind.int()), 1.),
                           lambda: _ind_put_fn(x, 0, 5.),
                           lambda: _ind_put_fn(x, slice(0, 1), 5.),
                           lambda: _set_real_imag(z, 3., 5.),
