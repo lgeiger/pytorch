@@ -922,6 +922,20 @@ class CudaReproTests(TestCase):
         if not same(fn(a), fn_optimized(a)):
             raise AssertionError
 
+    def test_scalar_tensor_index_assignment(self):
+        def assign_scalar(x, index):
+            x = x.clone()
+            x[index] = 3.0
+            return x
+
+        x = torch.randn(2, 3, device=device_type)
+        compiled_assign_scalar = torch.compile(assign_scalar, fullgraph=True)
+        for dtype in (torch.int64, torch.int32):
+            index = torch.tensor(0, dtype=dtype, device=device_type)
+            self.assertEqual(compiled_assign_scalar(x, index), assign_scalar(x, index))
+            index.fill_(1)
+            self.assertEqual(compiled_assign_scalar(x, index), assign_scalar(x, index))
+
     def test_indirect_indexing_dense_mask(self):
         def fn(x, y):
             ne = torch.ops.aten.ne.Scalar(x, 1)

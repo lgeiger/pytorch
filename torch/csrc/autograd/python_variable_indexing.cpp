@@ -238,6 +238,7 @@ static Variable applySlicing(
     PyObject* index,
     variable_list& outIndices,
     bool is_tracing,
+    bool is_scalar_setitem,
     const at::Device& self_device,
     const std::optional<int64_t>& self_ndim,
     int64_t specified_dims) {
@@ -290,7 +291,9 @@ static Variable applySlicing(
               auto scalar_type = tensor.scalar_type();
               if (tensor.dim() == 0 &&
                   at::isIntegralType(scalar_type, /*includeBool=*/false) &&
-                  scalar_type != at::kByte) {
+                  scalar_type != at::kByte &&
+                  !at::indexing::impl::shouldPreserveScalarTensorIndex(
+                      tensor, self, is_scalar_setitem)) {
                 recordSelectTrace(tensor);
               }
             }
@@ -317,6 +320,7 @@ static Variable applySlicing(
         // See NOTE [ Setting `disable_slice_optimization` when calling C++
         // tensor indexing functions from Python ]
         /*disable_slice_optimization=*/is_tracing,
+        /*is_scalar_setitem=*/is_scalar_setitem,
         /*original_tensor_device=*/self_device,
         /*prev_dim_result_sizes=*/result_sizes);
   }
@@ -467,6 +471,7 @@ PyObject* THPVariable_getitem(PyObject* self, PyObject* index) {
       holder.get(),
       variableIndices,
       /*is_tracing=*/is_tracing,
+      /*is_scalar_setitem=*/false,
       self_.device(),
       self_.ndimension(),
       specified_dims);
@@ -584,6 +589,7 @@ static int THPVariable_setitem_impl(
       holder.get(),
       variableIndices,
       /*is_tracing=*/is_tracing,
+      /*is_scalar_setitem=*/std::is_same_v<T, Scalar>,
       self_device,
       self_.ndimension(),
       specified_dims);

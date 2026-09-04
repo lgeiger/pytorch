@@ -2835,13 +2835,17 @@ torch.cuda.synchronize()
     )
     def test_graph_scalar_assignment(self):
         x = torch.zeros(2, 2, device="cuda")
+        index = torch.tensor(0, device="cuda")
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(g):
             x[0, 1] = 5.0
+            x[index, 0] = 4.0
 
         x.zero_()  # Reset the side-effect of capture execution
+        index.fill_(1)
         g.replay()
-        self.assertEqual(x[0, 1].item(), 5.0)
+        expected = torch.tensor([[0.0, 5.0], [4.0, 0.0]], device="cuda")
+        self.assertEqual(x, expected)
 
     @unittest.skipIf(
         not TEST_CUDA_GRAPH, "CUDA >= 11.0 or ROCM >= 5.3 required for graphs"

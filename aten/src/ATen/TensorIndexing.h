@@ -380,6 +380,20 @@ inline std::tuple<bool, Tensor> canDispatchToMaskedFill(
   return std::make_tuple(true, std::move(mask));
 }
 
+// Scalar tensor indices normally dispatch to select() to preserve view
+// semantics. Scalar setitem does not return a view, so a same-device CUDA
+// index can stay on device and avoid a synchronizing item().
+inline bool shouldPreserveScalarTensorIndex(
+    const Tensor& index,
+    const Tensor& self,
+    bool is_scalar_setitem) {
+  const auto scalar_type = index.scalar_type();
+  return is_scalar_setitem && self.is_cuda() &&
+      index.device() == self.device() && index.dim() == 0 &&
+      (scalar_type == kLong || scalar_type == kInt) && !self.is_quantized() &&
+      !index.is_alias_of(self);
+}
+
 // NOTE: Why do we mirror instead of replace the `count_specified_dimensions`
 // function in torch/csrc/autograd/python_variable_indexing.cpp? It's because
 // `count_specified_dimensions` is on the hot path of Python tensor multi-dim
@@ -516,6 +530,7 @@ inline Tensor handleDimInMultiDimIndexing(
     int64_t real_dim,
     std::vector<Tensor>& outIndices,
     bool disable_slice_optimization,
+    bool is_scalar_setitem,
     const at::Device& original_tensor_device,
     const std::optional<SymIntArrayRef>& prev_dim_result_sizes) {
   if (index.is_integer()) {
@@ -571,7 +586,9 @@ inline Tensor handleDimInMultiDimIndexing(
         {c10::DispatchKey::FuncTorchBatched,
          c10::DispatchKey::BatchedNestedTensor}));
     if (tensor.dim() == 0 && !is_batched &&
-        at::isIntegralType(scalar_type, /*includeBool=*/true)) {
+        at::isIntegralType(scalar_type, /*includeBool=*/true) &&
+        !impl::shouldPreserveScalarTensorIndex(
+            tensor, original_tensor, is_scalar_setitem)) {
       if (scalar_type != at::kByte && scalar_type != at::kBool) {
         result = impl::applySelect(
             result,
@@ -613,6 +630,7 @@ inline Tensor applySlicing(
     const ArrayRef<TensorIndex>& indices,
     std::vector<Tensor>& outIndices,
     bool disable_slice_optimization,
+    bool is_scalar_setitem,
     const at::Device& self_device,
     const std::optional<SymIntArrayRef>& self_sizes) {
   int64_t dim = 0;
@@ -642,6 +660,7 @@ inline Tensor applySlicing(
         /*real_dim=*/static_cast<int64_t>(i),
         /*outIndices=*/outIndices,
         /*disable_slice_optimization=*/disable_slice_optimization,
+        /*is_scalar_setitem=*/is_scalar_setitem,
         /*original_tensor_device=*/self_device,
         /*prev_dim_result_sizes=*/result_sizes);
   }
@@ -803,6 +822,7 @@ inline Tensor get_item(
       indices,
       tensorIndices,
       disable_slice_optimization,
+      /*is_scalar_setitem=*/false,
       self_device,
       self_sizes);
   if (tensorIndices.empty()) {
@@ -874,6 +894,7 @@ inline void set_item(
       indices,
       tensorIndices,
       disable_slice_optimization,
+      /*is_scalar_setitem=*/std::is_same_v<T, Scalar>,
       self_device,
       self_sizes);
   if (tensorIndices.empty()) {
